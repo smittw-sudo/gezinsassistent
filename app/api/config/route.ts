@@ -6,23 +6,32 @@ export async function GET(req: NextRequest) {
   const authFout = await requireAuth(req)
   if (authFout) return authFout
 
-  const instellingen = await getConfig('instellingen')
-  return NextResponse.json(instellingen || {})
+  try {
+    const instellingen = await getConfig('instellingen')
+    return NextResponse.json(instellingen || {})
+  } catch (e) {
+    console.error('GET /api/config fout:', e)
+    return NextResponse.json({ error: String(e) }, { status: 500 })
+  }
 }
 
 export async function POST(req: NextRequest) {
   const authFout = await requireAuth(req)
   if (authFout) return authFout
 
-  const updates = await req.json()
-  const huidig = (await getConfig('instellingen') as Record<string, string>) || {}
+  try {
+    const updates = await req.json()
+    const huidig = (await getConfig('instellingen') as Record<string, string>) || {}
 
-  // Alleen bekende velden updaten
-  const toegestaan = ['locatie', 'vakantie_regio', 'werk_regio']
-  for (const veld of toegestaan) {
-    if (updates[veld] !== undefined) huidig[veld] = updates[veld]
+    const toegestaan = ['locatie', 'vakantie_regio', 'werk_regio']
+    for (const veld of toegestaan) {
+      if (updates[veld] !== undefined) huidig[veld] = updates[veld]
+    }
+
+    await setConfig('instellingen', huidig)
+    return NextResponse.json({ ok: true })
+  } catch (e) {
+    console.error('POST /api/config fout:', e)
+    return NextResponse.json({ error: String(e) }, { status: 500 })
   }
-
-  await setConfig('instellingen', huidig)
-  return NextResponse.json({ ok: true })
 }
