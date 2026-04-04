@@ -1,5 +1,5 @@
 /**
- * Kalender reader via CalDAV (iCloud) — directe HTTP fetch zonder tsdav.
+ * Kalender reader via CalDAV (iCloud)
  */
 import ical from 'node-ical'
 import { addDays, format, parseISO, isWithinInterval, startOfDay } from 'date-fns'
@@ -13,166 +13,38 @@ export interface KalenderEvent {
   id?: string | number
 }
 
-// Haalt de CalDAV principal URL op voor iCloud
-async function haalPrincipalUrl(username: string, password: string): Promise<string> {
-  const auth = Buffer.from(`${username}:${password}`).toString('base64')
-
-  // iCloud CalDAV principal
-  const resp = await fetch('https://caldav.icloud.com/', {
-    method: 'PROPFIND',
-    headers: {
-      'Authorization': `Basic ${auth}`,
-      'Depth': '0',
-      'Content-Type': 'application/xml',
-    },
-    body: `<?xml version="1.0" encoding="utf-8"?>
-<propfind xmlns="DAV:">
-  <prop>
-    <current-user-principal/>
-  </prop>
-</propfind>`,
-  })
-
-  const text = await resp.text()
-  const match = text.match(/<href>([^<]*principal[^<]*)<\/href>/)
-  if (match) return `https://caldav.icloud.com${match[1]}`
-  return `https://caldav.icloud.com/${username.split('@')[0]}/`
-}
-
-// Haalt kalender-URLs op via PROPFIND
-async function haalKalenders(principalUrl: string, auth: string): Promise<{ url: string; naam: string }[]> {
-  // Haal home-set op
-  const resp = await fetch(principalUrl, {
-    method: 'PROPFIND',
-    headers: {
-      'Authorization': `Basic ${auth}`,
-      'Depth': '0',
-      'Content-Type': 'application/xml',
-    },
-    body: `<?xml version="1.0" encoding="utf-8"?>
-<propfind xmlns="DAV:" xmlns:cd="urn:ietf:params:xml:ns:caldav">
-  <prop>
-    <cd:calendar-home-set/>
-  </prop>
-</propfind>`,
-  })
-
-  const text = await resp.text()
-  const homeMatch = text.match(/<href>([^<]*)<\/href>/)
-  const homeUrl = homeMatch ? `https://caldav.icloud.com${homeMatch[1]}` : principalUrl
-
-  // Haal kalenders op uit home-set
-  const resp2 = await fetch(homeUrl, {
-    method: 'PROPFIND',
-    headers: {
-      'Authorization': `Basic ${auth}`,
-      'Depth': '1',
-      'Content-Type': 'application/xml',
-    },
-    body: `<?xml version="1.0" encoding="utf-8"?>
-<propfind xmlns="DAV:" xmlns:cd="urn:ietf:params:xml:ns:caldav">
-  <prop>
-    <displayname/>
-    <resourcetype/>
-  </prop>
-</propfind>`,
-  })
-
-  const text2 = await resp2.text()
-  const kalenders: { url: string; naam: string }[] = []
-
-  // Parse responses
-  const responses = text2.match(/<response>([\s\S]*?)<\/response>/g) || []
-  for (const r of responses) {
-    if (!r.includes('calendar')) continue
-    const hrefMatch = r.match(/<href>([^<]+)<\/href>/)
-    const nameMatch = r.match(/<displayname>([^<]*)<\/displayname>/)
-    if (hrefMatch) {
-      const url = hrefMatch[1].startsWith('http')
-        ? hrefMatch[1]
-        : `https://caldav.icloud.com${hrefMatch[1]}`
-      kalenders.push({ url, naam: nameMatch?.[1] || 'iCloud' })
-    }
-  }
-
-  return kalenders
-}
-
-// Haalt events op via REPORT
-async function haalEventsVanKalender(
-  kalenderUrl: string,
-  kalenderNaam: string,
+async function caldavRequest(
+  url: string,
+  method: string,
   auth: string,
-  vandaag: Date,
-  einddatum: Date
-): Promise<KalenderEvent[]> {
-  const start = format(vandaag, "yyyyMMdd'T'000000'Z'")
-  const end = format(einddatum, "yyyyMMdd'T'235959'Z'")
-
-  const resp = await fetch(kalenderUrl, {
-    method: 'REPORT',
+  depth: string,
+  body: string
+): Promise<string> {
+  const resp = await fetch(url, {
+    method,
     headers: {
       'Authorization': `Basic ${auth}`,
-      'Depth': '1',
-      'Content-Type': 'application/xml',
+      'Depth': depth,
+      'Content-Type': 'application/xml; charset=utf-8',
     },
-    body: `<?xml version="1.0" encoding="utf-8"?>
-<calendar-query xmlns="urn:ietf:params:xml:ns:caldav" xmlns:d="DAV:">
-  <d:prop>
-    <d:getetag/>
-    <calendar-data/>
-  </d:prop>
-  <filter>
-    <comp-filter name="VCALENDAR">
-      <comp-filter name="VEVENT">
-        <time-range start="${start}" end="${end}"/>
-      </comp-filter>
-    </comp-filter>
-  </filter>
-</calendar-query>`,
+    body,
+    redirect: 'follow',
   })
-
-  const text = await resp.text()
-  const events: KalenderEvent[] = []
-
-  // Extraheer calendar-data blokken
-  const dataBlokken = text.match(/<calendar-data[^>]*>([\s\S]*?)<\/calendar-data>/g) || []
-
-  for (const blok of dataBlokken) {
-    const icsData = blok
-      .replace(/<calendar-data[^>]*>/, '')
-      .replace(/<\/calendar-data>/, '')
-      .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&')
-      .trim()
-
-    if (!icsData.includes('BEGIN:VCALENDAR')) continue
-
-    try {
-      const parsed = ical.sync.parseICS(icsData)
-      for (const comp of Object.values(parsed)) {
-        if (!comp || comp.type !== 'VEVENT') continue
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const ev = comp as any
-        const start = ev.start as Date | undefined
-        if (!start) continue
-
-        const eventDatum = startOfDay(start)
-        if (!isWithinInterval(eventDatum, { start: vandaag, end: einddatum })) continue
-
-        events.push({
-          datum: format(start, 'yyyy-MM-dd'),
-          titel: String(ev.summary || ''),
-          locatie: String(ev.location || ''),
-          kalender: kalenderNaam,
-          bron: 'caldav',
-        })
-      }
-    } catch {
-      // Ongeldige ICS data — overslaan
-    }
+  if (!resp.ok && resp.status !== 207) {
+    throw new Error(`CalDAV ${method} ${url} -> HTTP ${resp.status}`)
   }
+  return resp.text()
+}
 
-  return events
+function parseHrefs(xml: string): string[] {
+  const matches = xml.matchAll(/<[^>]*:?href[^>]*>([^<]+)<\/[^>]*:?href>/g)
+  return Array.from(matches).map(m => m[1].trim())
+}
+
+function absoluteUrl(base: string, href: string): string {
+  if (href.startsWith('http')) return href
+  const u = new URL(base)
+  return `${u.protocol}//${u.host}${href}`
 }
 
 export async function haalCalDAVEvents(dagenVooruit = 21): Promise<KalenderEvent[]> {
@@ -180,32 +52,136 @@ export async function haalCalDAVEvents(dagenVooruit = 21): Promise<KalenderEvent
   const password = process.env.ICLOUD_APP_PASSWORD
 
   if (!username || !password) {
-    console.log('CalDAV: geen credentials ingesteld')
+    console.log('CalDAV: geen credentials')
     return []
   }
 
+  const auth = Buffer.from(`${username}:${password}`).toString('base64')
   const vandaag = startOfDay(new Date())
   const einddatum = addDays(vandaag, dagenVooruit)
-  const auth = Buffer.from(`${username}:${password}`).toString('base64')
 
   try {
-    const principalUrl = await haalPrincipalUrl(username, password)
-    const kalenders = await haalKalenders(principalUrl, auth)
+    // Stap 1: ontdek de echte server URL via well-known redirect
+    const wellKnownResp = await fetch('https://caldav.icloud.com/.well-known/caldav', {
+      method: 'GET',
+      headers: { 'Authorization': `Basic ${auth}` },
+      redirect: 'follow',
+    })
+    const serverBase = wellKnownResp.url.split('/').slice(0, 3).join('/')
+    console.log('CalDAV server:', serverBase)
 
-    if (kalenders.length === 0) {
-      console.log('CalDAV: geen kalenders gevonden')
-      return []
+    // Stap 2: principal URL
+    const principalXml = await caldavRequest(
+      `${serverBase}/`,
+      'PROPFIND', auth, '0',
+      `<?xml version="1.0"?><propfind xmlns="DAV:"><prop><current-user-principal/></prop></propfind>`
+    )
+
+    const principalHrefs = parseHrefs(principalXml).filter(h => h.includes('/') && !h.includes('caldav.icloud.com/'))
+    let principalPath = principalHrefs.find(h => h.length > 1) || ''
+    const principalUrl = principalPath.startsWith('http') ? principalPath : `${serverBase}${principalPath}`
+    console.log('CalDAV principal:', principalUrl)
+
+    // Stap 3: calendar-home-set
+    const homeXml = await caldavRequest(
+      principalUrl,
+      'PROPFIND', auth, '0',
+      `<?xml version="1.0"?><propfind xmlns="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav"><prop><c:calendar-home-set/></prop></propfind>`
+    )
+
+    const homeHrefs = parseHrefs(homeXml).filter(h => h.includes('calendars') || h.includes('calendar'))
+    const homeUrl = homeHrefs.length > 0
+      ? absoluteUrl(serverBase, homeHrefs[0])
+      : `${principalUrl}calendars/`
+    console.log('CalDAV home:', homeUrl)
+
+    // Stap 4: kalenders ophalen
+    const kalsXml = await caldavRequest(
+      homeUrl,
+      'PROPFIND', auth, '1',
+      `<?xml version="1.0"?><propfind xmlns="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav"><prop><displayname/><resourcetype/></prop></propfind>`
+    )
+
+    // Splits op <response> blokken
+    const responses = kalsXml.match(/<[^>]*:?response[^>]*>[\s\S]*?<\/[^>]*:?response>/g) || []
+    const kalenders: { url: string; naam: string }[] = []
+
+    for (const r of responses) {
+      if (!r.toLowerCase().includes('calendar')) continue
+      if (r.toLowerCase().includes('inbox') || r.toLowerCase().includes('outbox')) continue
+      const hrefMatch = r.match(/<[^>]*:?href[^>]*>([^<]+)<\/[^>]*:?href>/)
+      const nameMatch = r.match(/<[^>]*:?displayname[^>]*>([^<]*)<\/[^>]*:?displayname>/)
+      if (hrefMatch) {
+        kalenders.push({
+          url: absoluteUrl(serverBase, hrefMatch[1].trim()),
+          naam: nameMatch?.[1] || 'iCloud',
+        })
+      }
     }
 
+    console.log(`CalDAV: ${kalenders.length} kalenders gevonden:`, kalenders.map(k => k.naam))
+
+    if (kalenders.length === 0) return []
+
+    // Stap 5: events ophalen per kalender
+    const startStr = format(vandaag, "yyyyMMdd'T'000000'Z'")
+    const endStr = format(einddatum, "yyyyMMdd'T'235959'Z'")
     const alleEvents: KalenderEvent[] = []
+
     for (const kal of kalenders) {
-      const events = await haalEventsVanKalender(kal.url, kal.naam, auth, vandaag, einddatum)
-      alleEvents.push(...events)
+      try {
+        const eventsXml = await caldavRequest(
+          kal.url,
+          'REPORT', auth, '1',
+          `<?xml version="1.0"?><c:calendar-query xmlns:c="urn:ietf:params:xml:ns:caldav" xmlns:d="DAV:">
+  <d:prop><d:getetag/><c:calendar-data/></d:prop>
+  <c:filter><c:comp-filter name="VCALENDAR"><c:comp-filter name="VEVENT">
+    <c:time-range start="${startStr}" end="${endStr}"/>
+  </c:comp-filter></c:comp-filter></c:filter>
+</c:calendar-query>`
+        )
+
+        const dataBlokken = eventsXml.match(/<[^>]*calendar-data[^>]*>([\s\S]*?)<\/[^>]*calendar-data>/g) || []
+
+        for (const blok of dataBlokken) {
+          const icsData = blok
+            .replace(/<[^>]*calendar-data[^>]*>/, '')
+            .replace(/<\/[^>]*calendar-data>/, '')
+            .replace(/&#13;/g, '').trim()
+
+          if (!icsData.includes('BEGIN:VCALENDAR')) continue
+
+          try {
+            const parsed = ical.sync.parseICS(icsData)
+            for (const comp of Object.values(parsed)) {
+              if (!comp || comp.type !== 'VEVENT') continue
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              const ev = comp as any
+              const evStart = ev.start as Date | undefined
+              if (!evStart) continue
+
+              const eventDatum = startOfDay(evStart)
+              if (!isWithinInterval(eventDatum, { start: vandaag, end: einddatum })) continue
+
+              alleEvents.push({
+                datum: format(evStart, 'yyyy-MM-dd'),
+                titel: String(ev.summary || ''),
+                locatie: String(ev.location || ''),
+                kalender: kal.naam,
+                bron: 'caldav',
+              })
+            }
+          } catch { /* ongeldige ICS */ }
+        }
+      } catch (e) {
+        console.error(`CalDAV events fout voor ${kal.naam}:`, e)
+      }
     }
 
     alleEvents.sort((a, b) => a.datum.localeCompare(b.datum))
-    console.log(`CalDAV: ${alleEvents.length} events gevonden`)
+    console.log(`CalDAV: ${alleEvents.length} events totaal`)
     return alleEvents
+
   } catch (err) {
     console.error('CalDAV fout:', err)
     return []
@@ -217,15 +193,10 @@ export function bepaalTaakStatus(
   laatsteUitvoering: string | null
 ): { status: 'te_doen' | 'binnenkort' | 'ok' | 'onbekend'; dagenTotVolgende: number } {
   const vandaag = startOfDay(new Date())
-
-  if (!laatsteUitvoering) {
-    return { status: 'onbekend', dagenTotVolgende: 0 }
-  }
-
+  if (!laatsteUitvoering) return { status: 'onbekend', dagenTotVolgende: 0 }
   const laatste = startOfDay(parseISO(laatsteUitvoering))
   const volgende = addDays(laatste, intervalDagen)
   const dagenTotVolgende = Math.round((volgende.getTime() - vandaag.getTime()) / 86400000)
-
   if (dagenTotVolgende <= 0) return { status: 'te_doen', dagenTotVolgende }
   if (dagenTotVolgende <= 2) return { status: 'binnenkort', dagenTotVolgende }
   return { status: 'ok', dagenTotVolgende }
