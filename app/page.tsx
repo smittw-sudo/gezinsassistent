@@ -72,7 +72,10 @@ export default function Dashboard() {
   const [suggestiesLaden, setSuggestiesLaden] = useState(true)
   const [afgevinkteItems, setAfgevinkteItems] = useState<Set<string>>(new Set())
   const [nuNodigItems, setNuNodigItems] = useState<Set<string>>(new Set())
-  const [afgevinktSignaleringen, setAfgevinktSignaleringen] = useState<Set<string>>(new Set())
+  const [afgevinktSignaleringen, setAfgevinktSignaleringen] = useState<Set<string>>(() => {
+    if (typeof window === 'undefined') return new Set()
+    try { return new Set(JSON.parse(localStorage.getItem('afgevinkt') || '[]')) } catch { return new Set() }
+  })
   const [likedSug, setLikedSug] = useState<Set<string>>(new Set())
   const [dislikedSug, setDislikedSug] = useState<Set<string>>(new Set())
   const [digestStatus, setDigestStatus] = useState('')
@@ -107,8 +110,12 @@ export default function Dashboard() {
   }
 
   async function afvinkSignalering(item: { type: string; key: string; id?: number; label: string }) {
-    // Direct visueel verbergen
-    setAfgevinktSignaleringen(p => new Set(p).add(item.key))
+    // Direct visueel verbergen + opslaan in localStorage
+    setAfgevinktSignaleringen(p => {
+      const n = new Set(p).add(item.key)
+      try { localStorage.setItem('afgevinkt', JSON.stringify([...n])) } catch {}
+      return n
+    })
     if (item.type === 'taak') {
       const naam = item.label.replace(/^🏠 /, '')
       setAfgevinkteItems(p => new Set(p).add(naam))
@@ -153,22 +160,19 @@ export default function Dashboard() {
   const nu = new Date()
   const vandaagStr = `${DAGEN[nu.getDay()]} ${nu.getDate()} ${MAANDEN_LANG[nu.getMonth()]} ${nu.getFullYear()}`
 
-  // Bouw signaleringen samen
+  // Signaleringen: alleen vandaag
   const alleSignaleringen = data ? [
-    // Vandaag's agenda-events
     ...data.vandaagEvents.map(e => ({ label: `📅 ${e.titel}`, subLabel: e.locatie || e.kalender, dagen: 0, type: 'event', key: `ev-${e.titel}` })),
-    // Urgente taken
     ...data.taken.filter(t => t.status === 'te_doen' || t.status === 'onbekend').map(t => ({ label: `🏠 ${t.naam}`, subLabel: t.status === 'onbekend' ? 'nooit gedaan' : 'al te lang geleden', dagen: 0, type: 'taak', key: `taak-${t.naam}` })),
-    // Nu nodig taken
     ...data.nuNodig.map(n => ({ label: `⚡ ${n.tekst}`, subLabel: 'nu nodig', dagen: 0, type: 'nu_nodig', key: `nn-${n.id}`, id: n.id })),
-    // Dagelijkse todos
     ...data.todos.map(t => ({ label: `✅ ${t.tekst}`, subLabel: 'taak vandaag', dagen: 0, type: 'todo', key: `todo-${t.id}`, id: t.id })),
-    // Verjaardagen
-    ...data.verjaardagen.map(v => ({ label: `🎂 ${v.naam}${v.relatie ? ` (${v.relatie})` : ''}`, subLabel: '', dagen: v.dagenTot, type: 'verjaardag', key: `vj-${v.naam}` })),
-    // Feestdagen
-    ...data.feestdagen.map(f => ({ label: `🎉 ${f.naam}`, subLabel: '', dagen: f.dagenTot, type: 'feestdag', key: `fd-${f.naam}` })),
-    // School
-    ...data.schoolSignaleringen.map(s => ({ label: `📚 ${s.omschrijving}${s.leerling ? ` – ${s.leerling}` : ''}`, subLabel: '', dagen: s.dagenTot, type: 'school', key: `sc-${s.omschrijving}` })),
+  ].filter(item => !afgevinktSignaleringen.has(item.key)) : []
+
+  // Verjaardagen, feestdagen en school — apart blok
+  const alleHerinneringen = data ? [
+    ...data.verjaardagen.map(v => ({ label: `🎂 ${v.naam}${v.relatie ? ` (${v.relatie})` : ''}`, dagen: v.dagenTot, type: 'verjaardag', key: `vj-${v.naam}` })),
+    ...data.feestdagen.map(f => ({ label: `🎉 ${f.naam}`, dagen: f.dagenTot, type: 'feestdag', key: `fd-${f.naam}` })),
+    ...data.schoolSignaleringen.map(s => ({ label: `📚 ${s.omschrijving}${s.leerling ? ` – ${s.leerling}` : ''}`, dagen: s.dagenTot, type: 'school', key: `sc-${s.omschrijving}` })),
   ].sort((a, b) => a.dagen - b.dagen).filter(item => !afgevinktSignaleringen.has(item.key)) : []
 
   return (
@@ -237,6 +241,24 @@ export default function Dashboard() {
                 <p className={`text-xs ${isVandaag(e.datum) ? 'text-blue-600 font-semibold' : 'text-slate-400'}`}>{fmtDatum(e.datum)}</p>
                 <p className="text-sm font-medium text-slate-800">{e.titel}</p>
                 {e.locatie && <p className="text-xs text-slate-400">{e.locatie}</p>}
+              </div>
+            ))
+          }
+        </Kaart>
+
+        {/* ── VERJAARDAGEN & HERINNERINGEN ── */}
+        <Kaart titel="Verjaardagen & herinneringen" icoon="🎂">
+          {!data ? <Laden /> : alleHerinneringen.length === 0
+            ? <p className="text-slate-400 text-sm italic">Niets binnenkort</p>
+            : alleHerinneringen.map(item => (
+              <div key={item.key} className="flex items-start py-2 border-b border-slate-50 last:border-0 gap-2">
+                <button
+                  onClick={() => afvinkSignalering(item)}
+                  title="Afvinken"
+                  className="mt-0.5 w-5 h-5 shrink-0 rounded-full border-2 border-slate-300 hover:border-green-500 hover:bg-green-50 transition-colors"
+                />
+                <span className="text-sm text-slate-700 flex-1 truncate">{item.label}</span>
+                <DagenBadge d={item.dagen} />
               </div>
             ))
           }
