@@ -2,6 +2,7 @@ import Anthropic from '@anthropic-ai/sdk'
 import { format, getDay } from 'date-fns'
 import { nl } from 'date-fns/locale'
 import { cacheOpslaan, cacheLezen } from './supabase'
+import { eerstvolgendeVrijeDag, komende2Vakanties } from './school'
 
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
 
@@ -11,47 +12,59 @@ export async function genereerWeekendSuggesties(
   feedback: { tekst: string; oordeel: number }[],
   ververs = false
 ): Promise<string> {
-  const cacheKey = `suggesties_${format(new Date(), 'yyyy-MM-dd')}`
+  const vandaag = new Date()
+  const cacheKey = `suggesties_${format(vandaag, 'yyyy-MM-dd')}`
 
   if (!ververs) {
     const gecached = await cacheLezen(cacheKey, 12)
     if (gecached) return gecached
   }
 
-  const vandaag = new Date()
-  const komende21Dagen = Array.from({ length: 21 }, (_, i) => {
+  // Bepaal het eerstvolgende vrije moment (weekend of vakantie)
+  const vrijeMoment = eerstvolgendeVrijeDag(vandaag)
+  const vakanties = komende2Vakanties(vandaag)
+  const eersteVakantie = vakanties[0]
+
+  // Vrije weekenddagen de komende 3 weken zonder afspraken
+  const komende21 = Array.from({ length: 21 }, (_, i) => {
     const d = new Date(vandaag)
     d.setDate(d.getDate() + i)
     return d
   })
+  const vrijeWeekend = komende21
+    .filter(d => getDay(d) === 0 || getDay(d) === 6)
+    .filter(d => !events.some(e => e.datum === format(d, 'yyyy-MM-dd')))
+    .slice(0, 4) // max 4 vrije weekenddagen tonen
 
-  const weekenddagen = komende21Dagen.filter(d => getDay(d) === 0 || getDay(d) === 6)
-  const vrij = weekenddagen.filter(d => {
-    const iso = format(d, 'yyyy-MM-dd')
-    return !events.some(e => e.datum === iso)
-  })
+  // Activiteiten tijdens aankomende vakantie
+  const vakantieEvents = eersteVakantie
+    ? events.filter(e => e.datum >= eersteVakantie.start && e.datum <= eersteVakantie.einde)
+    : []
 
-  const likedTekst = feedback
-    .filter(f => f.oordeel === 1)
-    .slice(0, 5)
-    .map(f => `- ${f.tekst}`)
-    .join('\n')
+  const liked = feedback.filter(f => f.oordeel === 1).slice(0, 5).map(f => `- ${f.tekst}`).join('\n')
+  const disliked = feedback.filter(f => f.oordeel === -1).slice(0, 5).map(f => `- ${f.tekst}`).join('\n')
 
-  const dislikedTekst = feedback
-    .filter(f => f.oordeel === -1)
-    .slice(0, 5)
-    .map(f => `- ${f.tekst}`)
-    .join('\n')
+  const fokusLabel = vrijeMoment
+    ? vrijeMoment.naam === 'Weekend'
+      ? `aankomend weekend (${format(new Date(vrijeMoment.datum), 'EEEE d MMMM', { locale: nl })})`
+      : `${vrijeMoment.naam} (start ${format(new Date(vrijeMoment.datum), 'd MMMM', { locale: nl })})`
+    : 'komend weekend'
 
-  const prompt = `Je bent een persoonlijke gezinsassistent voor een gezin in de omgeving van ${locatie} (Noord-Holland).
-Gezin: twee ouders, twee kinderen op het Roland Holst College in Hilversum.
+  const prompt = `Je bent persoonlijke gezinsassistent voor een gezin in ${locatie}, Noord-Holland.
+Gezin: twee ouders, twee kinderen (middelbare school Hilversum).
 
 Vandaag: ${format(vandaag, 'EEEE d MMMM yyyy', { locale: nl })}
-Vrije weekenddagen komende 3 weken: ${vrij.map(d => format(d, 'EEEE d MMMM', { locale: nl })).join(', ') || 'geen'}
+Focus op: ${fokusLabel}
 
-${likedTekst ? `Eerder gewaardeerde suggesties (doe meer zo):\n${likedTekst}\n` : ''}${dislikedTekst ? `Minder geschikte suggesties (vermijd dit):\n${dislikedTekst}\n` : ''}
-Geef 4 concrete activiteitensuggesties voor de vrije weekenddagen. Wees specifiek: noem plaatsnamen, routes, evenementen, restaurants of uitjes in Noord-Holland/Gooi/Vechtstreek.
-Formaat: geef elke suggestie als één alinea van 2-3 zinnen. Begin elke suggestie met een emoji en de naam van de activiteit in **vet**.`
+Vrije weekenddagen zonder afspraken: ${vrijeWeekend.map(d => format(d, 'EEEE d MMMM', { locale: nl })).join(', ') || 'geen'}
+${eersteVakantie ? `\nAankomende vakantie: ${eersteVakantie.naam} (${eersteVakantie.start} t/m ${eersteVakantie.einde})${vakantieEvents.length ? `\nAl gepland in vakantie: ${vakantieEvents.map(e => e.titel).join(', ')}` : ''}` : ''}
+${liked ? `\nEerder gewaardeerd (doe meer zo):\n${liked}` : ''}${disliked ? `\nMinder geschikt (vermijd):\n${disliked}` : ''}
+
+Geef precies 3 concrete activiteitensuggesties gericht op ${fokusLabel}.
+Kies uitjes in Noord-Holland, Gooi, Vechtstreek of Eemnes-omgeving.
+Wees specifiek: noem plaatsnamen, routes, evenementen of adressen.
+Houd rekening met het seizoen (${format(vandaag, 'MMMM', { locale: nl })}).
+Formaat: emoji + **naam** op de eerste regel, daarna 2 zinnen uitleg.`
 
   const bericht = await client.messages.create({
     model: 'claude-sonnet-4-6',

@@ -1,99 +1,71 @@
-/**
- * School scraper voor arhc.nl (Adolphe Reineveld Holland College / Roland Holst College)
- * Haalt vakantiedagen, PTA en roosterwijzigingen op.
- */
-
 export interface SchoolItem {
-  datum: string       // YYYY-MM-DD
+  datum: string
   omschrijving: string
   leerling: 'dochter' | 'zoon' | 'beiden'
   type: 'vakantie' | 'examen' | 'vrij' | 'toets' | 'rooster'
 }
 
-const ARHC_URL = 'https://www.arhc.nl'
-
-async function haalPagina(url: string): Promise<string | null> {
-  try {
-    const resp = await fetch(url, {
-      headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36' },
-      next: { revalidate: 3600 }, // cache 1 uur
-    })
-    if (!resp.ok) return null
-    return resp.text()
-  } catch {
-    return null
-  }
+export interface Vakantieperiode {
+  naam: string
+  start: string   // YYYY-MM-DD
+  einde: string   // YYYY-MM-DD
+  regio: 'prive' | 'werk' | 'beide'
+  events?: { datum: string; titel: string; kalender: string }[]
 }
 
-function vindDatumPatronen(tekst: string): { datum: string; context: string }[] {
-  const maanden: Record<string, number> = {
-    januari: 1, februari: 2, maart: 3, april: 4, mei: 5, juni: 6,
-    juli: 7, augustus: 8, september: 9, oktober: 10, november: 11, december: 12,
-  }
-
-  const resultaten: { datum: string; context: string }[] = []
-  const patroon = /(\d{1,2})\s+(januari|februari|maart|april|mei|juni|juli|augustus|september|oktober|november|december)\s+(\d{4})/gi
-
-  let match: RegExpExecArray | null
-  while ((match = patroon.exec(tekst)) !== null) {
-    const dag = match[1].padStart(2, '0')
-    const maand = String(maanden[match[2].toLowerCase()]).padStart(2, '0')
-    const jaar = match[3]
-    const datum = `${jaar}-${maand}-${dag}`
-    const context = tekst.slice(Math.max(0, match.index - 100), match.index + 100)
-    resultaten.push({ datum, context })
-  }
-
-  return resultaten
+export function haalVakantieperiodes(): Vakantieperiode[] {
+  return [
+    // 2025-2026 schooljaar regio Midden
+    { naam: 'Meivakantie', start: '2026-04-25', einde: '2026-05-10', regio: 'beide' },
+    { naam: 'Zomervakantie', start: '2026-07-04', einde: '2026-08-16', regio: 'beide' },
+    // Werkvakantie (Kalsbeek College regio Midden - iets andere data)
+    { naam: 'Herfstvakantie', start: '2025-10-18', einde: '2025-10-26', regio: 'beide' },
+    { naam: 'Kerstvakantie', start: '2025-12-27', einde: '2026-01-04', regio: 'beide' },
+    { naam: 'Voorjaarsvakantie', start: '2026-02-21', einde: '2026-03-01', regio: 'beide' },
+    { naam: 'Goede Vrijdag & Pasen', start: '2026-04-03', einde: '2026-04-06', regio: 'beide' },
+  ]
 }
 
-function bepaalType(context: string): SchoolItem['type'] {
-  const laag = context.toLowerCase()
-  if (laag.includes('examen') || laag.includes('eindexamen')) return 'examen'
-  if (laag.includes('toets') || laag.includes('proefwerk')) return 'toets'
-  if (laag.includes('vakantie')) return 'vakantie'
-  if (laag.includes('rooster') || laag.includes('vrij')) return 'vrij'
-  return 'vrij'
+export function komende2Vakanties(vandaag: Date = new Date()): Vakantieperiode[] {
+  const iso = vandaag.toISOString().slice(0, 10)
+  return haalVakantieperiodes()
+    .filter(v => v.einde >= iso)
+    .sort((a, b) => a.start.localeCompare(b.start))
+    .slice(0, 2)
+}
+
+export function eerstvolgendeVrijeDag(vandaag: Date = new Date()): { datum: string; naam: string } | null {
+  // Kijk of we in een vakantie zitten of een vakantie nadert
+  const iso = vandaag.toISOString().slice(0, 10)
+  const vakanties = haalVakantieperiodes()
+
+  // In vakantie?
+  const huidige = vakanties.find(v => v.start <= iso && v.einde >= iso)
+  if (huidige) return { datum: huidige.einde, naam: `${huidige.naam} (nog bezig)` }
+
+  // Aankomend weekend
+  const dag = vandaag.getDay()
+  const dagenTotWeekend = dag === 6 ? 0 : dag === 0 ? 0 : 6 - dag
+  const weekend = new Date(vandaag)
+  weekend.setDate(weekend.getDate() + dagenTotWeekend)
+  const weekendIso = weekend.toISOString().slice(0, 10)
+
+  // Aankomende vakantie vóór het weekend?
+  const aankomend = vakanties.find(v => v.start > iso)
+  if (aankomend && aankomend.start < weekendIso) {
+    return { datum: aankomend.start, naam: aankomend.naam }
+  }
+
+  return { datum: weekendIso, naam: 'Weekend' }
 }
 
 export async function haalSchoolData(): Promise<SchoolItem[]> {
   const vandaag = new Date()
-  const items: SchoolItem[] = []
-
-  // Probeer meerdere pagina's
-  const paden = ['/kalender', '/vakanties', '/nieuws', '/leerlingen', '/']
-  for (const pad of paden) {
-    const html = await haalPagina(ARHC_URL + pad)
-    if (!html) continue
-
-    const gevonden = vindDatumPatronen(html)
-    for (const { datum, context } of gevonden) {
-      const d = new Date(datum)
-      const dagenTot = Math.round((d.getTime() - vandaag.getTime()) / 86400000)
-      if (dagenTot < 0 || dagenTot > 60) continue
-
-      items.push({
-        datum,
-        omschrijving: context.replace(/<[^>]*>/g, '').trim().slice(0, 80),
-        leerling: 'beiden',
-        type: bepaalType(context),
-      })
-    }
-
-    if (items.length > 0) break
-  }
-
-  // Altijd fallback schoolvakanties 2025-2026 (regio Midden) toevoegen als er niets gevonden is
-  if (items.length === 0) {
-    return fallbackVakanties().filter(item => {
-      const dagenTot = Math.round((new Date(item.datum).getTime() - vandaag.getTime()) / 86400000)
-      return dagenTot >= 0 && dagenTot <= 60
-    })
-  }
-
-  // Verwijder duplicaten op basis van datum
-  const uniek = items.filter((item, i) => items.findIndex(x => x.datum === item.datum) === i)
-  return uniek.sort((a, b) => a.datum.localeCompare(b.datum))
+  const items = fallbackVakanties()
+  return items.filter(item => {
+    const d = new Date(item.datum)
+    return Math.round((d.getTime() - vandaag.getTime()) / 86400000) >= 0
+  })
 }
 
 export function haalSchoolSignaleringen(alleItems: SchoolItem[], vensterdagen = 30) {
@@ -116,12 +88,12 @@ function fallbackVakanties(): SchoolItem[] {
     { datum: '2026-01-04', omschrijving: 'Kerstvakantie (einde)', leerling: 'beiden', type: 'vakantie' },
     { datum: '2026-02-21', omschrijving: 'Voorjaarsvakantie (start)', leerling: 'beiden', type: 'vakantie' },
     { datum: '2026-03-01', omschrijving: 'Voorjaarsvakantie (einde)', leerling: 'beiden', type: 'vakantie' },
-    { datum: '2026-04-04', omschrijving: 'Goede Vrijdag (schoolvrij)', leerling: 'beiden', type: 'vrij' },
-    { datum: '2026-04-06', omschrijving: '2e Paasdag (schoolvrij)', leerling: 'beiden', type: 'vrij' },
+    { datum: '2026-04-03', omschrijving: 'Goede Vrijdag (vrij)', leerling: 'beiden', type: 'vrij' },
+    { datum: '2026-04-06', omschrijving: '2e Paasdag (vrij)', leerling: 'beiden', type: 'vrij' },
     { datum: '2026-04-25', omschrijving: 'Meivakantie (start)', leerling: 'beiden', type: 'vakantie' },
     { datum: '2026-05-10', omschrijving: 'Meivakantie (einde)', leerling: 'beiden', type: 'vakantie' },
-    { datum: '2026-05-11', omschrijving: 'Centraal examen start — dochter (6-VWO)', leerling: 'dochter', type: 'examen' },
-    { datum: '2026-06-07', omschrijving: 'Zomervakantie (start)', leerling: 'beiden', type: 'vakantie' },
+    { datum: '2026-05-11', omschrijving: 'Centraal examen start — dochter', leerling: 'dochter', type: 'examen' },
+    { datum: '2026-07-04', omschrijving: 'Zomervakantie (start)', leerling: 'beiden', type: 'vakantie' },
     { datum: '2026-08-16', omschrijving: 'Zomervakantie (einde)', leerling: 'beiden', type: 'vakantie' },
   ]
 }

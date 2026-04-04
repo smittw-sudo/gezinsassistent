@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { requireAuth } from '@/lib/middleware-check'
-import { getConfig, setConfig, taakAfvinken } from '@/lib/supabase'
+import { getConfig, setConfig, taakAfvinken, agendaItemToevoegen } from '@/lib/supabase'
 
 export async function POST(req: NextRequest) {
   const authFout = await requireAuth(req)
@@ -14,6 +14,12 @@ export async function POST(req: NextRequest) {
   switch (actie) {
     case 'afvinken': {
       await taakAfvinken(taakNaam)
+      return NextResponse.json({ ok: true })
+    }
+
+    case 'nu_nodig': {
+      const vandaag = new Date().toISOString().slice(0, 10)
+      await agendaItemToevoegen(taakNaam, vandaag, null, '__nu_nodig__')
       return NextResponse.json({ ok: true })
     }
 
