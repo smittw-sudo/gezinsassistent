@@ -72,10 +72,7 @@ export default function Dashboard() {
   const [suggestiesLaden, setSuggestiesLaden] = useState(true)
   const [afgevinkteItems, setAfgevinkteItems] = useState<Set<string>>(new Set())
   const [nuNodigItems, setNuNodigItems] = useState<Set<string>>(new Set())
-  const [afgevinktSignaleringen, setAfgevinktSignaleringen] = useState<Set<string>>(() => {
-    if (typeof window === 'undefined') return new Set()
-    try { return new Set(JSON.parse(localStorage.getItem('afgevinkt') || '[]')) } catch { return new Set() }
-  })
+  const [afgevinktSignaleringen, setAfgevinktSignaleringen] = useState<Set<string>>(new Set())
   const [likedSug, setLikedSug] = useState<Set<string>>(new Set())
   const [dislikedSug, setDislikedSug] = useState<Set<string>>(new Set())
   const [digestStatus, setDigestStatus] = useState('')
@@ -95,6 +92,19 @@ export default function Dashboard() {
     setSuggestiesLaden(false)
   }, [])
 
+  // Laad localStorage na mount (client-only)
+  useEffect(() => {
+    try {
+      const opgeslagen = JSON.parse(localStorage.getItem('afgevinkt') || '[]')
+      if (opgeslagen.length > 0) setAfgevinktSignaleringen(new Set(opgeslagen))
+    } catch {}
+  }, [])
+
+  // Sla afgevinkte items op in localStorage wanneer ze veranderen
+  useEffect(() => {
+    try { localStorage.setItem('afgevinkt', JSON.stringify([...afgevinktSignaleringen])) } catch {}
+  }, [afgevinktSignaleringen])
+
   useEffect(() => { laadDashboard(); laadSuggesties() }, [laadDashboard, laadSuggesties])
 
   async function afvinken(naam: string) {
@@ -109,25 +119,21 @@ export default function Dashboard() {
     laadDashboard()
   }
 
-  async function afvinkSignalering(item: { type: string; key: string; id?: number; label: string }) {
-    // Direct visueel verbergen + opslaan in localStorage
-    setAfgevinktSignaleringen(p => {
-      const n = new Set(p).add(item.key)
-      try { localStorage.setItem('afgevinkt', JSON.stringify([...n])) } catch {}
-      return n
-    })
+  function afvinkSignalering(item: { type: string; key: string; id?: number; label: string }) {
+    // Direct visueel verbergen — state update is puur, geen side-effects
+    setAfgevinktSignaleringen(p => new Set(p).add(item.key))
+
     if (item.type === 'taak') {
-      const naam = item.label.replace(/^🏠 /, '')
+      // Taak-naam zit in de key: "taak-Stofzuigen"
+      const naam = item.key.slice('taak-'.length)
       setAfgevinkteItems(p => new Set(p).add(naam))
-      await fetch('/api/taken', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ actie: 'afvinken', taakNaam: naam }) })
-      setTimeout(laadDashboard, 800)
-    } else if (item.type === 'todo' || item.type === 'nu_nodig') {
-      if (item.id != null) {
-        await fetch('/api/signaleringen', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ actie: 'verwijderen', id: item.id }) })
-        laadDashboard()
-      }
+      fetch('/api/taken', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ actie: 'afvinken', taakNaam: naam }) })
+        .then(() => setTimeout(laadDashboard, 800))
+    } else if ((item.type === 'todo' || item.type === 'nu_nodig') && item.id != null) {
+      fetch('/api/signaleringen', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ actie: 'verwijderen', id: item.id }) })
+        .then(() => setTimeout(laadDashboard, 400))
     }
-    // event/verjaardag/feestdag/school: alleen lokaal verbergen
+    // event/verjaardag/feestdag/school: alleen lokaal verbergen via localStorage
   }
 
   async function voegTodoToe() {
@@ -214,6 +220,7 @@ export default function Dashboard() {
                 : alleSignaleringen.map(item => (
                   <div key={item.key} className="flex justify-between items-start py-2 border-b border-slate-50 last:border-0 gap-2">
                     <button
+                      type="button"
                       onClick={() => afvinkSignalering(item)}
                       title="Afvinken"
                       className="mt-0.5 w-5 h-5 shrink-0 rounded-full border-2 border-slate-300 hover:border-green-500 hover:bg-green-50 transition-colors flex items-center justify-center"
@@ -253,6 +260,7 @@ export default function Dashboard() {
             : alleHerinneringen.map(item => (
               <div key={item.key} className="flex items-start py-2 border-b border-slate-50 last:border-0 gap-2">
                 <button
+                  type="button"
                   onClick={() => afvinkSignalering(item)}
                   title="Afvinken"
                   className="mt-0.5 w-5 h-5 shrink-0 rounded-full border-2 border-slate-300 hover:border-green-500 hover:bg-green-50 transition-colors"
