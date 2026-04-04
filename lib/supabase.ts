@@ -96,6 +96,75 @@ export async function suggestieFeedbackOphalen(): Promise<{ tekst: string; oorde
   return data ?? []
 }
 
+// ── Bewaarde activiteiten ──────────────────────────────────────────────────────
+
+export interface BewaardActiviteit {
+  id: number
+  tekst: string
+  modus: string
+  gedaan: boolean
+  aangemaakt_op: string
+}
+
+export async function activiteitenOphalen(): Promise<BewaardActiviteit[]> {
+  const { data } = await db().from('bewaarde_activiteiten').select('*').order('aangemaakt_op', { ascending: false })
+  return data ?? []
+}
+
+export async function activiteitOpslaan(tekst: string, modus: string): Promise<void> {
+  await db().from('bewaarde_activiteiten').insert({ tekst, modus })
+}
+
+export async function activiteitVerwijderen(id: number): Promise<void> {
+  await db().from('bewaarde_activiteiten').delete().eq('id', id)
+}
+
+export async function activiteitGedaan(id: number, gedaan: boolean): Promise<void> {
+  await db().from('bewaarde_activiteiten').update({ gedaan }).eq('id', id)
+}
+
+// ── Vakantie-planbord ──────────────────────────────────────────────────────────
+
+export interface VakantiePlanItem {
+  id: number
+  vakantie_naam: string
+  vakantie_start: string
+  idee: string
+  toegewezen_aan: string | null
+  boekingsdatum: string | null
+  klaar: boolean
+  aangemaakt_op: string
+}
+
+export async function vakantiePlanOphalen(vakantieStart: string): Promise<VakantiePlanItem[]> {
+  const { data } = await db().from('vakantie_plan').select('*').eq('vakantie_start', vakantieStart).order('aangemaakt_op')
+  return data ?? []
+}
+
+export async function vakantiePlanToevoegen(
+  vakantieNaam: string,
+  vakantieStart: string,
+  idee: string,
+  toegewezenAan?: string,
+  boekingsdatum?: string
+): Promise<void> {
+  await db().from('vakantie_plan').insert({
+    vakantie_naam: vakantieNaam,
+    vakantie_start: vakantieStart,
+    idee,
+    toegewezen_aan: toegewezenAan || null,
+    boekingsdatum: boekingsdatum || null,
+  })
+}
+
+export async function vakantiePlanAfvinken(id: number, klaar: boolean): Promise<void> {
+  await db().from('vakantie_plan').update({ klaar }).eq('id', id)
+}
+
+export async function vakantiePlanVerwijderen(id: number): Promise<void> {
+  await db().from('vakantie_plan').delete().eq('id', id)
+}
+
 // ── Cache ──────────────────────────────────────────────────────────────────────
 
 export async function cacheOpslaan(sleutel: string, waarde: string): Promise<void> {

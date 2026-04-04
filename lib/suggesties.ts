@@ -10,10 +10,11 @@ export async function genereerWeekendSuggesties(
   locatie: string,
   events: { datum: string; titel: string }[],
   feedback: { tekst: string; oordeel: number }[],
-  ververs = false
+  ververs = false,
+  modus: 'gezin' | 'stel' = 'gezin'
 ): Promise<string> {
   const vandaag = new Date()
-  const cacheKey = `suggesties_${format(vandaag, 'yyyy-MM-dd')}`
+  const cacheKey = `suggesties_${modus}_${format(vandaag, 'yyyy-MM-dd')}`
 
   if (!ververs) {
     const gecached = await cacheLezen(cacheKey, 12)
@@ -50,8 +51,12 @@ export async function genereerWeekendSuggesties(
       : `${vrijeMoment.naam} (start ${format(new Date(vrijeMoment.datum), 'd MMMM', { locale: nl })})`
     : 'komend weekend'
 
+  const modusContext = modus === 'stel'
+    ? 'Alleen de twee ouders, kinderen zijn elders. Romantisch, ontspannen of avontuurlijk voor twee.'
+    : 'Heel gezin: twee ouders + twee tieners (middelbare school Hilversum).'
+
   const prompt = `Je bent persoonlijke gezinsassistent voor een gezin in ${locatie}, Noord-Holland.
-Gezin: twee ouders, twee kinderen (middelbare school Hilversum).
+${modusContext}
 
 Vandaag: ${format(vandaag, 'EEEE d MMMM yyyy', { locale: nl })}
 Focus op: ${fokusLabel}
@@ -60,7 +65,7 @@ Vrije weekenddagen zonder afspraken: ${vrijeWeekend.map(d => format(d, 'EEEE d M
 ${eersteVakantie ? `\nAankomende vakantie: ${eersteVakantie.naam} (${eersteVakantie.start} t/m ${eersteVakantie.einde})${vakantieEvents.length ? `\nAl gepland in vakantie: ${vakantieEvents.map(e => e.titel).join(', ')}` : ''}` : ''}
 ${liked ? `\nEerder gewaardeerd (doe meer zo):\n${liked}` : ''}${disliked ? `\nMinder geschikt (vermijd):\n${disliked}` : ''}
 
-Geef precies 3 concrete activiteitensuggesties gericht op ${fokusLabel}.
+Geef precies 3 concrete activiteitensuggesties gericht op ${fokusLabel}${modus === 'stel' ? ' voor twee volwassenen' : ' als gezin'}.
 Kies uitjes in Noord-Holland, Gooi, Vechtstreek of Eemnes-omgeving.
 Wees specifiek: noem plaatsnamen, routes, evenementen of adressen.
 Houd rekening met het seizoen (${format(vandaag, 'MMMM', { locale: nl })}).

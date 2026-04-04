@@ -9,6 +9,7 @@ export async function GET(req: NextRequest) {
   if (authFout) return authFout
 
   const ververs = req.nextUrl.searchParams.get('ververs') === '1'
+  const modus = (req.nextUrl.searchParams.get('modus') || 'gezin') as 'gezin' | 'stel'
   const instellingen = await getConfig('instellingen') as { locatie?: string } | null
   const events = await haalCalDAVEvents(21)
   const feedback = await suggestieFeedbackOphalen()
@@ -17,7 +18,8 @@ export async function GET(req: NextRequest) {
     instellingen?.locatie || 'Hilversum',
     events,
     feedback,
-    ververs
+    ververs,
+    modus
   )
 
   return NextResponse.json({ suggesties: tekst })
