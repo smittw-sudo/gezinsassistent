@@ -36,6 +36,109 @@ function fmtPeriode(start: string, einde: string) {
 }
 function isVandaag(iso: string) { return iso === new Date().toISOString().slice(0, 10) }
 
+interface AgendaBlok {
+  label: string
+  type: 'weekend' | 'vakantie' | 'feestdag'
+  start: string
+  einde: string
+  events: Event[]
+}
+
+const FEESTDAGEN: Record<string, string> = {
+  '2025-12-25': '1e Kerstdag', '2025-12-26': '2e Kerstdag',
+  '2026-01-01': 'Nieuwjaarsdag', '2026-04-03': 'Goede Vrijdag',
+  '2026-04-05': '1e Paasdag', '2026-04-06': '2e Paasdag',
+  '2026-04-27': 'Koningsdag', '2026-05-05': 'Bevrijdingsdag',
+  '2026-05-14': 'Hemelvaartsdag', '2026-05-15': 'Vrijdag na Hemelvaart',
+  '2026-05-25': '2e Pinksterdag',
+}
+
+// Vakanties (regio Noord prive + ARHC school)
+const VAKANTIE_PERIODES = [
+  { naam: 'Herfstvakantie (Noord)', start: '2025-10-11', einde: '2025-10-19' },
+  { naam: 'Herfstvakantie (ARHC)', start: '2025-10-18', einde: '2025-10-26' },
+  { naam: 'Kerstvakantie', start: '2025-12-20', einde: '2026-01-04' },
+  { naam: 'Roland Holst week', start: '2026-01-19', einde: '2026-01-23' },
+  { naam: 'Voorjaarsvakantie (Noord)', start: '2026-02-14', einde: '2026-02-22' },
+  { naam: 'Voorjaarsvakantie (ARHC)', start: '2026-02-21', einde: '2026-03-01' },
+  { naam: 'Meivakantie (ARHC)', start: '2026-04-18', einde: '2026-05-03' },
+  { naam: 'Meivakantie (Noord)', start: '2026-04-25', einde: '2026-05-10' },
+  { naam: 'Roland Holst week', start: '2026-05-26', einde: '2026-05-29' },
+  { naam: 'Zomervakantie', start: '2026-07-04', einde: '2026-08-23' },
+]
+
+function getVakantieVoorDatum(iso: string): string | null {
+  const v = VAKANTIE_PERIODES.find(v => iso >= v.start && iso <= v.einde)
+  return v?.naam ?? null
+}
+
+function bouwAgendaBlokken(events: Event[], vandaag: Date): AgendaBlok[] {
+  const blokkenMap = new Map<string, AgendaBlok>()
+
+  // Genereer weekend-blokken voor de komende 8 weken
+  for (let i = 0; i < 56; i++) {
+    const d = new Date(vandaag)
+    d.setDate(vandaag.getDate() + i)
+    const iso = d.toISOString().slice(0, 10)
+    const dag = d.getDay()
+    if (dag === 6) { // zaterdag → start weekend-blok
+      const zon = new Date(d); zon.setDate(d.getDate() + 1)
+      const zonIso = zon.toISOString().slice(0, 10)
+      const key = `weekend-${iso}`
+      if (!blokkenMap.has(key)) {
+        blokkenMap.set(key, {
+          label: `Weekend ${d.getDate()}–${zon.getDate()} ${MAANDEN_LANG[d.getMonth()]}`,
+          type: 'weekend', start: iso, einde: zonIso, events: [],
+        })
+      }
+    }
+  }
+
+  // Vakantie-blokken (komende 90 dagen)
+  for (const v of VAKANTIE_PERIODES) {
+    const vandaagIso = vandaag.toISOString().slice(0, 10)
+    const over90 = new Date(vandaag); over90.setDate(vandaag.getDate() + 90)
+    const over90Iso = over90.toISOString().slice(0, 10)
+    if (v.einde >= vandaagIso && v.start <= over90Iso) {
+      const key = `vakantie-${v.start}`
+      if (!blokkenMap.has(key)) {
+        blokkenMap.set(key, { label: v.naam, type: 'vakantie', start: v.start, einde: v.einde, events: [] })
+      }
+    }
+  }
+
+  // Wijs events toe aan blokken
+  for (const event of events) {
+    // Probeer vakantie-blok eerst
+    const vakantieKey = [...blokkenMap.entries()].find(
+      ([, b]) => b.type === 'vakantie' && event.datum >= b.start && event.datum <= b.einde
+    )?.[0]
+    if (vakantieKey) {
+      blokkenMap.get(vakantieKey)!.events.push(event)
+      continue
+    }
+    // Dan weekend-blok
+    const weekendKey = [...blokkenMap.entries()].find(
+      ([, b]) => b.type === 'weekend' && event.datum >= b.start && event.datum <= b.einde
+    )?.[0]
+    if (weekendKey) {
+      blokkenMap.get(weekendKey)!.events.push(event)
+    }
+    // Feestdag buiten weekend/vakantie: maak losse blok
+    const feestNaam = FEESTDAGEN[event.datum]
+    if (feestNaam && !vakantieKey && !weekendKey) {
+      const key = `feestdag-${event.datum}`
+      if (!blokkenMap.has(key)) {
+        blokkenMap.set(key, { label: feestNaam, type: 'feestdag', start: event.datum, einde: event.datum, events: [] })
+      }
+      blokkenMap.get(key)!.events.push(event)
+    }
+  }
+
+  // Sorteer op start-datum
+  return [...blokkenMap.values()].sort((a, b) => a.start.localeCompare(b.start))
+}
+
 function DagenBadge({ d }: { d: number }) {
   if (d <= 0) return <span className="text-xs font-bold text-red-600 bg-red-50 px-2 py-0.5 rounded-full">vandaag!</span>
   if (d === 1) return <span className="text-xs font-semibold text-orange-600 bg-orange-50 px-2 py-0.5 rounded-full">morgen</span>
@@ -239,19 +342,38 @@ export default function Dashboard() {
           )}
         </Kaart>
 
-        {/* ── AGENDA ── */}
-        <Kaart titel="Agenda — 3 weken" icoon="📅">
-          {!data ? <Laden /> : data.events.length === 0
-            ? <p className="text-slate-400 text-sm italic">Geen afspraken</p>
-            : data.events.map((e, i) => (
-              <div key={i} className={`py-2 border-b border-slate-50 last:border-0 ${isVandaag(e.datum) ? 'bg-blue-50 -mx-4 px-4 rounded' : ''}`}>
-                <p className={`text-xs ${isVandaag(e.datum) ? 'text-blue-600 font-semibold' : 'text-slate-400'}`}>{fmtDatum(e.datum)}</p>
-                <p className="text-sm font-medium text-slate-800">{e.titel}</p>
-                {e.locatie && <p className="text-xs text-slate-400">{e.locatie}</p>}
-              </div>
-            ))
-          }
-        </Kaart>
+        {/* ── AGENDA (weekenden & vrije dagen) ── */}
+        {(() => {
+          if (!data) return <Kaart titel="Weekenden & vrije dagen" icoon="📅"><Laden /></Kaart>
+          const blokken = bouwAgendaBlokken(data.events, nu)
+          const blokkenMetEvents = blokken.filter(b => b.events.length > 0)
+          return (
+            <Kaart titel="Weekenden & vrije dagen" icoon="📅">
+              {blokkenMetEvents.length === 0
+                ? <p className="text-slate-400 text-sm italic">Geen afspraken in vrije periodes</p>
+                : blokkenMetEvents.map((blok, i) => (
+                  <div key={blok.start} className={i > 0 ? 'mt-4 pt-4 border-t border-slate-200' : ''}>
+                    <div className="flex items-center gap-2 mb-2">
+                      <span className="text-xs font-semibold text-slate-500 uppercase tracking-wide">
+                        {blok.type === 'vakantie' ? '🏖️' : blok.type === 'feestdag' ? '🎉' : '📅'} {blok.label}
+                      </span>
+                      {blok.type !== 'weekend' && (
+                        <span className="text-xs text-slate-400">{fmtPeriode(blok.start, blok.einde)}</span>
+                      )}
+                    </div>
+                    {blok.events.map((e, j) => (
+                      <div key={j} className="py-1.5 pl-3 border-l-2 border-slate-100 mb-1 last:mb-0">
+                        <p className="text-xs text-slate-400">{fmtDatum(e.datum)}</p>
+                        <p className="text-sm font-medium text-slate-800">{e.titel}</p>
+                        {e.locatie && <p className="text-xs text-slate-400">{e.locatie}</p>}
+                      </div>
+                    ))}
+                  </div>
+                ))
+              }
+            </Kaart>
+          )
+        })()}
 
         {/* ── VERJAARDAGEN & HERINNERINGEN ── */}
         <Kaart titel="Verjaardagen & herinneringen" icoon="🎂">

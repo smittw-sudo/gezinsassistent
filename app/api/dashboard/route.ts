@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { requireAuth } from '@/lib/middleware-check'
 import { haalCalDAVEvents, bepaalTaakStatus, dagenTotDatum } from '@/lib/kalender'
 import { getConfig, agendaItemsOphalen, laatsteUitvoering } from '@/lib/supabase'
-import { haalSchoolData, haalSchoolSignaleringen, komende2Vakanties } from '@/lib/school'
+import { haalSchoolData, haalSchoolSignaleringen, komende2Vakanties, isVrijeDag } from '@/lib/school'
 
 export async function GET(req: NextRequest) {
   const authFout = await requireAuth(req)
@@ -11,19 +11,23 @@ export async function GET(req: NextRequest) {
   const vandaagIso = new Date().toISOString().slice(0, 10)
 
   // Haal alle data parallel op — langere range voor vakantie-events
-  const [takenConfig, verjaardagenConfig, feestdagenConfig, instellingen, agendaItems, calEvents60, schoolData] =
+  const [takenConfig, verjaardagenConfig, feestdagenConfig, instellingen, agendaItems, geselecteerdeKalenders, schoolData] =
     await Promise.all([
       getConfig('huishoudtaken') as Promise<{ naam: string; interval_dagen: number }[]>,
       getConfig('verjaardagen') as Promise<{ naam: string; datum: string; relatie: string }[]>,
       getConfig('feestdagen') as Promise<{ naam: string; datum: string }[]>,
       getConfig('instellingen') as Promise<{ locatie: string; vakantie_regio: string; werk_regio: string }>,
       agendaItemsOphalen(),
-      haalCalDAVEvents(90), // 90 dagen voor vakantie-blok
+      getConfig('geselecteerde_kalenders') as Promise<string[] | null>,
       haalSchoolData(),
     ])
 
-  // Events splitsen: 21 dagen voor agenda, vandaag apart, vakanties apart
-  const events21 = calEvents60.filter(e => e.datum >= vandaagIso && e.datum <= addDaysIso(vandaagIso, 21))
+  const calEvents60 = await haalCalDAVEvents(90, geselecteerdeKalenders ?? undefined)
+
+  // Events splitsen: alleen vrije dagen (weekend/feestdag/vakantie), vandaag apart, vakanties apart
+  const events21 = calEvents60.filter(e =>
+    e.datum >= vandaagIso && e.datum <= addDaysIso(vandaagIso, 90) && isVrijeDag(e.datum)
+  )
   const vandaagEvents = calEvents60.filter(e => e.datum === vandaagIso)
 
   // Handmatige agenda items (geen todos/nu_nodig)

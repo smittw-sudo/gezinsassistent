@@ -47,7 +47,41 @@ function absoluteUrl(base: string, href: string): string {
   return `${u.protocol}//${u.host}${href}`
 }
 
-export async function haalCalDAVEvents(dagenVooruit = 21): Promise<KalenderEvent[]> {
+/** Haal alleen de kalender-namen op (zonder events) */
+export async function haalCalDAVKalenderNamen(): Promise<string[]> {
+  const username = process.env.ICLOUD_USERNAME
+  const password = process.env.ICLOUD_APP_PASSWORD
+  if (!username || !password) return []
+  const auth = Buffer.from(`${username}:${password}`).toString('base64')
+  try {
+    const wellKnownResp = await fetch('https://caldav.icloud.com/.well-known/caldav', {
+      method: 'GET', headers: { 'Authorization': `Basic ${auth}` }, redirect: 'follow',
+    })
+    const serverBase = wellKnownResp.url.split('/').slice(0, 3).join('/')
+    const principalXml = await caldavRequest(`${serverBase}/`, 'PROPFIND', auth, '0',
+      `<?xml version="1.0"?><propfind xmlns="DAV:"><prop><current-user-principal/></prop></propfind>`)
+    const principalHrefs = parseHrefs(principalXml).filter(h => h.includes('/') && !h.includes('caldav.icloud.com/'))
+    const principalPath = principalHrefs.find(h => h.length > 1) || ''
+    const principalUrl = principalPath.startsWith('http') ? principalPath : `${serverBase}${principalPath}`
+    const homeXml = await caldavRequest(principalUrl, 'PROPFIND', auth, '0',
+      `<?xml version="1.0"?><propfind xmlns="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav"><prop><c:calendar-home-set/></prop></propfind>`)
+    const homeHrefs = parseHrefs(homeXml).filter(h => h.includes('calendars') || h.includes('calendar'))
+    const homeUrl = homeHrefs.length > 0 ? absoluteUrl(serverBase, homeHrefs[0]) : `${principalUrl}calendars/`
+    const kalsXml = await caldavRequest(homeUrl, 'PROPFIND', auth, '1',
+      `<?xml version="1.0"?><propfind xmlns="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav"><prop><displayname/><resourcetype/></prop></propfind>`)
+    const responses = kalsXml.match(/<[^>]*:?response[^>]*>[\s\S]*?<\/[^>]*:?response>/g) || []
+    const namen: string[] = []
+    for (const r of responses) {
+      if (!r.toLowerCase().includes('calendar')) continue
+      if (r.toLowerCase().includes('inbox') || r.toLowerCase().includes('outbox')) continue
+      const nameMatch = r.match(/<[^>]*:?displayname[^>]*>([^<]+)<\/[^>]*:?displayname>/)
+      if (nameMatch?.[1]) namen.push(nameMatch[1])
+    }
+    return namen
+  } catch { return [] }
+}
+
+export async function haalCalDAVEvents(dagenVooruit = 21, filterKalenders?: string[]): Promise<KalenderEvent[]> {
   const username = process.env.ICLOUD_USERNAME
   const password = process.env.ICLOUD_APP_PASSWORD
 
@@ -123,12 +157,17 @@ export async function haalCalDAVEvents(dagenVooruit = 21): Promise<KalenderEvent
 
     if (kalenders.length === 0) return []
 
+    // Filter op geselecteerde kalenders (als opgegeven)
+    const actieveKalenders = filterKalenders && filterKalenders.length > 0
+      ? kalenders.filter(k => filterKalenders.includes(k.naam))
+      : kalenders
+
     // Stap 5: events ophalen per kalender
     const startStr = format(vandaag, "yyyyMMdd'T'000000'Z'")
     const endStr = format(einddatum, "yyyyMMdd'T'235959'Z'")
     const alleEvents: KalenderEvent[] = []
 
-    for (const kal of kalenders) {
+    for (const kal of actieveKalenders) {
       try {
         const eventsXml = await caldavRequest(
           kal.url,

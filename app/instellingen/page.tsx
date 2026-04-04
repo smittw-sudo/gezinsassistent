@@ -16,6 +16,11 @@ export default function Instellingen() {
   const [werkRegio, setWerkRegio] = useState('')
   const [status, setStatus] = useState<{ tekst: string; type: 'ok' | 'fout' } | null>(null)
 
+  // iCloud kalenders
+  const [beschikbareKalenders, setBeschikbareKalenders] = useState<string[]>([])
+  const [geselecteerdeKalenders, setGeselecteerdeKalenders] = useState<string[]>([])
+  const [kalendersLaden, setKalendersLaden] = useState(false)
+
   // Nieuwe taak state
   const [nieuweTaakNaam, setNieuweTaakNaam] = useState('')
   const [nieuweTaakInterval, setNieuweTaakInterval] = useState(7)
@@ -53,7 +58,34 @@ export default function Instellingen() {
     }
   }
 
+  async function laadKalenders() {
+    setKalendersLaden(true)
+    const r = await fetch('/api/kalenders')
+    if (r.ok) {
+      const d = await r.json()
+      setBeschikbareKalenders(d.beschikbaar)
+      setGeselecteerdeKalenders(d.geselecteerd)
+    }
+    setKalendersLaden(false)
+  }
+
+  async function slaKalendersOp() {
+    const resp = await fetch('/api/kalenders', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ geselecteerd: geselecteerdeKalenders }),
+    })
+    toonStatus(resp.ok ? 'Kalenders opgeslagen' : 'Fout bij opslaan', resp.ok ? 'ok' : 'fout')
+  }
+
+  function toggleKalender(naam: string) {
+    setGeselecteerdeKalenders(prev =>
+      prev.includes(naam) ? prev.filter(k => k !== naam) : [...prev, naam]
+    )
+  }
+
   useEffect(() => { laadData() }, [])
+  useEffect(() => { laadKalenders() }, [])
 
   function toonStatus(tekst: string, type: 'ok' | 'fout' = 'ok') {
     setStatus({ tekst, type })
@@ -198,6 +230,34 @@ export default function Instellingen() {
             </Veld>
             <button onClick={slaInstellingenOp} className={knopKlasse}>Opslaan</button>
           </div>
+        </Sectie>
+
+        {/* iCloud kalenders */}
+        <Sectie titel="iCloud kalenders" icoon="📅">
+          {kalendersLaden ? (
+            <p className="text-sm text-slate-400 italic">Kalenders ophalen...</p>
+          ) : beschikbareKalenders.length === 0 ? (
+            <p className="text-sm text-slate-400 italic">Geen iCloud-kalenders gevonden. Controleer je CalDAV-instellingen.</p>
+          ) : (
+            <div className="space-y-2">
+              <p className="text-xs text-slate-500 mb-3">Selecteer welke agenda's je wilt meenemen in het dashboard.</p>
+              {beschikbareKalenders.map(naam => (
+                <label key={naam} className="flex items-center gap-3 cursor-pointer py-1">
+                  <input
+                    type="checkbox"
+                    checked={geselecteerdeKalenders.includes(naam)}
+                    onChange={() => toggleKalender(naam)}
+                    className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                  />
+                  <span className="text-sm text-slate-700">{naam}</span>
+                </label>
+              ))}
+              <div className="flex gap-2 mt-3">
+                <button onClick={slaKalendersOp} className={knopKlasse}>Opslaan</button>
+                <button onClick={laadKalenders} className="text-sm text-blue-500 hover:text-blue-700 px-3 py-2">↻ Vernieuwen</button>
+              </div>
+            </div>
+          )}
         </Sectie>
 
         {/* Huishoudtaken */}
