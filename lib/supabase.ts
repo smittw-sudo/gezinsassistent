@@ -1,29 +1,16 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 
-// Lazy initialisatie zodat build niet faalt zonder env vars
-let _client: SupabaseClient | null = null
-
-function getClient(): SupabaseClient {
-  if (!_client) {
-    const url = process.env.NEXT_PUBLIC_SUPABASE_URL
-    const key = process.env.SUPABASE_SERVICE_ROLE_KEY
-    if (!url || !key) throw new Error('Supabase env vars niet ingesteld')
-    _client = createClient(url, key)
-  }
-  return _client
+function db(): SupabaseClient {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY
+  if (!url || !key) throw new Error('Supabase env vars niet ingesteld')
+  return createClient(url, key)
 }
-
-// Server-side client met service role (bypast RLS)
-export const supabase = new Proxy({} as SupabaseClient, {
-  get(_target, prop) {
-    return getClient()[prop as keyof SupabaseClient]
-  },
-})
 
 // ── Config helpers ─────────────────────────────────────────────────────────────
 
 export async function getConfig(sleutel: string): Promise<unknown> {
-  const { data } = await supabase
+  const { data } = await db()
     .from('app_config')
     .select('waarde')
     .eq('sleutel', sleutel)
@@ -32,7 +19,7 @@ export async function getConfig(sleutel: string): Promise<unknown> {
 }
 
 export async function setConfig(sleutel: string, waarde: unknown): Promise<void> {
-  await supabase
+  await db()
     .from('app_config')
     .upsert({ sleutel, waarde, bijgewerkt_op: new Date().toISOString() })
 }
@@ -40,14 +27,14 @@ export async function setConfig(sleutel: string, waarde: unknown): Promise<void>
 // ── Taken ──────────────────────────────────────────────────────────────────────
 
 export async function taakAfvinken(taakNaam: string, datum?: string): Promise<void> {
-  await supabase.from('taak_uitvoering').insert({
+  await db().from('taak_uitvoering').insert({
     taak_naam: taakNaam,
     uitgevoerd_op: datum || new Date().toISOString().slice(0, 10),
   })
 }
 
 export async function laatsteUitvoering(taakNaam: string): Promise<string | null> {
-  const { data } = await supabase
+  const { data } = await db()
     .from('taak_uitvoering')
     .select('uitgevoerd_op')
     .eq('taak_naam', taakNaam)
@@ -69,7 +56,7 @@ export interface AgendaItem {
 }
 
 export async function agendaItemsOphalen(): Promise<AgendaItem[]> {
-  const { data } = await supabase
+  const { data } = await db()
     .from('agenda_items')
     .select('*')
     .order('datum', { ascending: true })
@@ -82,7 +69,7 @@ export async function agendaItemToevoegen(
   herhaalIntervalDagen: number | null,
   notitie: string
 ): Promise<number> {
-  const { data } = await supabase
+  const { data } = await db()
     .from('agenda_items')
     .insert({ titel, datum, herhaal_interval_dagen: herhaalIntervalDagen, notitie })
     .select('id')
@@ -91,17 +78,17 @@ export async function agendaItemToevoegen(
 }
 
 export async function agendaItemVerwijderen(id: number): Promise<void> {
-  await supabase.from('agenda_items').delete().eq('id', id)
+  await db().from('agenda_items').delete().eq('id', id)
 }
 
 // ── Suggestie feedback ─────────────────────────────────────────────────────────
 
 export async function suggestieLike(tekst: string, oordeel: 1 | -1): Promise<void> {
-  await supabase.from('suggestie_feedback').insert({ tekst, oordeel })
+  await db().from('suggestie_feedback').insert({ tekst, oordeel })
 }
 
 export async function suggestieFeedbackOphalen(): Promise<{ tekst: string; oordeel: number }[]> {
-  const { data } = await supabase
+  const { data } = await db()
     .from('suggestie_feedback')
     .select('tekst, oordeel')
     .order('aangemaakt_op', { ascending: false })
@@ -112,13 +99,13 @@ export async function suggestieFeedbackOphalen(): Promise<{ tekst: string; oorde
 // ── Cache ──────────────────────────────────────────────────────────────────────
 
 export async function cacheOpslaan(sleutel: string, waarde: string): Promise<void> {
-  await supabase
+  await db()
     .from('cache')
     .upsert({ sleutel, waarde, bijgewerkt_op: new Date().toISOString() })
 }
 
 export async function cacheLezen(sleutel: string, maxUurOud = 24): Promise<string | null> {
-  const { data } = await supabase
+  const { data } = await db()
     .from('cache')
     .select('waarde, bijgewerkt_op')
     .eq('sleutel', sleutel)
