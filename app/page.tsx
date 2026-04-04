@@ -72,6 +72,7 @@ export default function Dashboard() {
   const [suggestiesLaden, setSuggestiesLaden] = useState(true)
   const [afgevinkteItems, setAfgevinkteItems] = useState<Set<string>>(new Set())
   const [nuNodigItems, setNuNodigItems] = useState<Set<string>>(new Set())
+  const [afgevinktSignaleringen, setAfgevinktSignaleringen] = useState<Set<string>>(new Set())
   const [likedSug, setLikedSug] = useState<Set<string>>(new Set())
   const [dislikedSug, setDislikedSug] = useState<Set<string>>(new Set())
   const [digestStatus, setDigestStatus] = useState('')
@@ -103,6 +104,23 @@ export default function Dashboard() {
     setNuNodigItems(p => new Set(p).add(naam))
     await fetch('/api/taken', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ actie: 'nu_nodig', taakNaam: naam }) })
     laadDashboard()
+  }
+
+  async function afvinkSignalering(item: { type: string; key: string; id?: number; label: string }) {
+    // Direct visueel verbergen
+    setAfgevinktSignaleringen(p => new Set(p).add(item.key))
+    if (item.type === 'taak') {
+      const naam = item.label.replace(/^🏠 /, '')
+      setAfgevinkteItems(p => new Set(p).add(naam))
+      await fetch('/api/taken', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ actie: 'afvinken', taakNaam: naam }) })
+      setTimeout(laadDashboard, 800)
+    } else if (item.type === 'todo' || item.type === 'nu_nodig') {
+      if (item.id != null) {
+        await fetch('/api/signaleringen', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ actie: 'verwijderen', id: item.id }) })
+        laadDashboard()
+      }
+    }
+    // event/verjaardag/feestdag/school: alleen lokaal verbergen
   }
 
   async function voegTodoToe() {
@@ -151,7 +169,7 @@ export default function Dashboard() {
     ...data.feestdagen.map(f => ({ label: `🎉 ${f.naam}`, subLabel: '', dagen: f.dagenTot, type: 'feestdag', key: `fd-${f.naam}` })),
     // School
     ...data.schoolSignaleringen.map(s => ({ label: `📚 ${s.omschrijving}${s.leerling ? ` – ${s.leerling}` : ''}`, subLabel: '', dagen: s.dagenTot, type: 'school', key: `sc-${s.omschrijving}` })),
-  ].sort((a, b) => a.dagen - b.dagen) : []
+  ].sort((a, b) => a.dagen - b.dagen).filter(item => !afgevinktSignaleringen.has(item.key)) : []
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -191,15 +209,17 @@ export default function Dashboard() {
                 ? <p className="text-slate-400 text-sm italic">Niets bijzonders vandaag</p>
                 : alleSignaleringen.map(item => (
                   <div key={item.key} className="flex justify-between items-start py-2 border-b border-slate-50 last:border-0 gap-2">
+                    <button
+                      onClick={() => afvinkSignalering(item)}
+                      title="Afvinken"
+                      className="mt-0.5 w-5 h-5 shrink-0 rounded-full border-2 border-slate-300 hover:border-green-500 hover:bg-green-50 transition-colors flex items-center justify-center"
+                    />
                     <div className="flex-1 min-w-0">
                       <p className="text-sm text-slate-700 truncate">{item.label}</p>
                       {item.subLabel && <p className="text-xs text-slate-400">{item.subLabel}</p>}
                     </div>
                     <div className="flex items-center gap-1 shrink-0">
                       <DagenBadge d={item.dagen} />
-                      {(item.type === 'todo' || item.type === 'nu_nodig') && 'id' in item && item.id != null && (
-                        <button onClick={() => verwijderTodo(item.id as number)} className="text-xs text-slate-300 hover:text-red-400 ml-1">✕</button>
-                      )}
                     </div>
                   </div>
                 ))
