@@ -1,10 +1,24 @@
-import { createClient } from '@supabase/supabase-js'
+import { createClient, SupabaseClient } from '@supabase/supabase-js'
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
-const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!
+// Lazy initialisatie zodat build niet faalt zonder env vars
+let _client: SupabaseClient | null = null
+
+function getClient(): SupabaseClient {
+  if (!_client) {
+    const url = process.env.NEXT_PUBLIC_SUPABASE_URL
+    const key = process.env.SUPABASE_SERVICE_ROLE_KEY
+    if (!url || !key) throw new Error('Supabase env vars niet ingesteld')
+    _client = createClient(url, key)
+  }
+  return _client
+}
 
 // Server-side client met service role (bypast RLS)
-export const supabase = createClient(supabaseUrl, supabaseServiceKey)
+export const supabase = new Proxy({} as SupabaseClient, {
+  get(_target, prop) {
+    return getClient()[prop as keyof SupabaseClient]
+  },
+})
 
 // ── Config helpers ─────────────────────────────────────────────────────────────
 
