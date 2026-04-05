@@ -182,11 +182,6 @@ export default function Dashboard() {
   }, [])
 
   useEffect(() => {
-    try { return new Set(JSON.parse(localStorage.getItem('afgevinkt') || '[]')) } catch {}
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
-
-  useEffect(() => {
     const opgeslagen = (() => { try { return new Set<string>(JSON.parse(localStorage.getItem('afgevinkt') || '[]')) } catch { return new Set<string>() } })()
     if (opgeslagen.size > 0) setAfgevinktSignaleringen(opgeslagen)
     const modusOpgeslagen = localStorage.getItem('modus') as 'gezin'|'stel' | null
